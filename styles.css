@@ -96,6 +96,9 @@ a { color:var(--accent); }
 .big-number { font-family:'Cormorant Garamond',serif; font-size:3rem; line-height:1; color:var(--accent); }
 
 footer { background:var(--ink); color:rgba(245,240,232,0.45); text-align:center; padding:2rem 1.5rem; font-size:0.72rem; }
+.badge { display:table; margin:0 auto 0.6rem; padding:0.3rem 0.8rem; border-radius:2rem; font-size:0.7rem; background:rgba(245,240,232,0.08); color:rgba(245,240,232,0.7); }
+.badge.ok { background:rgba(126,217,154,0.15); color:#7ed99a; }
+footer #offline-badge:empty { display:none; }
 
 @media (min-width:600px) { .grid { grid-template-columns:repeat(3,1fr); } }
 @media print {

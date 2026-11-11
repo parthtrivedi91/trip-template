@@ -106,11 +106,17 @@
       .map(function (r) { var o = {}; cols.forEach(function (c, i) { if (c) o[c] = (r[i] || '').trim(); }); return o; });
     return { cols: cols, rows: out };
   }
+  function fetchWithTimeout(url, ms) {
+    return new Promise(function (resolve, reject) {
+      var t = setTimeout(function () { reject(new Error('no response after ' + (ms / 1000) + 's')); }, ms);
+      fetch(url, { cache: 'no-store' }).then(function (r) { clearTimeout(t); resolve(r); }, function (e) { clearTimeout(t); reject(e); });
+    });
+  }
   function loadSheet(id) {
     return Promise.all(TABS.map(function (tab) {
       var url = 'https://docs.google.com/spreadsheets/d/' + encodeURIComponent(id) +
         '/gviz/tq?tqx=out:csv&headers=1&sheet=' + encodeURIComponent(tab);
-      return fetch(url).then(function (r) {
+      return fetchWithTimeout(url, 10000).then(function (r) {
         if (!r.ok) throw new Error(tab + ': HTTP ' + r.status);
         return r.text();
       }).then(function (t) {
@@ -179,13 +185,29 @@
       return '<div class="tab' + (i === 0 ? ' active' : '') + '" id="tab-' + esc(s.section_id) + '"><section class="section">' +
         RENDER[s.section_id](ctx, s.label) + '</section></div>';
     }).join('');
-    html += '<footer>' + esc(trip.title || '') + ' · data ' + esc(meta.source) +
-      (meta.loadedAt ? ' · loaded ' + esc(meta.loadedAt) : '') + '</footer>';
+    html += '<footer><div id="offline-badge"></div>' + esc(trip.title || '') + ' · data ' + esc(meta.source) +
+      (meta.loadedAt ? ' · ' + esc(meta.loadedAt) : '') + '</footer>';
 
-    var app = document.getElementById('app');
-    app.innerHTML = html;
-    app.addEventListener('click', onClick);
-    app.addEventListener('change', onChange);
+    document.getElementById('app').innerHTML = html;
+    if (currentTab && document.getElementById('tab-' + currentTab)) showTab(currentTab, false);
+    updateBadge();
+  }
+  var currentTab = null;
+  function showTab(id, scroll) {
+    currentTab = id;
+    document.querySelectorAll('.nav-btn').forEach(function (b) { b.classList.toggle('active', b.dataset.tab === id); });
+    document.querySelectorAll('.tab').forEach(function (t) { t.classList.toggle('active', t.id === 'tab-' + id); });
+    if (scroll) window.scrollTo({ top: document.querySelector('.nav').offsetTop, behavior: 'smooth' });
+  }
+  // "Saved for offline" = the site files are held by the service worker AND a copy of the trip data is stored.
+  var hasSavedData = false;
+  function updateBadge() {
+    var el = document.getElementById('offline-badge');
+    if (!el) return;
+    var sw = 'serviceWorker' in navigator && navigator.serviceWorker.controller;
+    if (sw && hasSavedData) { el.className = 'badge ok'; el.textContent = '✓ Saved for offline'; }
+    else if (sw) { el.className = 'badge ok'; el.textContent = '✓ Site saved for offline'; }
+    else { el.className = 'badge'; el.textContent = 'Not saved for offline yet: open once with internet, then reload'; }
   }
   function metaItem(label, value) { return '<div><span class="meta-label">' + esc(label) + '</span><span class="meta-value">' + esc(value) + '</span></div>'; }
   function index(rows, key) { var o = {}; rows.forEach(function (r) { if (r[key]) o[r[key]] = r; }); return o; }
@@ -193,12 +215,7 @@
 
   function onClick(e) {
     var btn = e.target.closest('.nav-btn');
-    if (btn) {
-      document.querySelectorAll('.nav-btn').forEach(function (b) { b.classList.toggle('active', b === btn); });
-      document.querySelectorAll('.tab').forEach(function (t) { t.classList.toggle('active', t.id === 'tab-' + btn.dataset.tab); });
-      window.scrollTo({ top: document.querySelector('.nav').offsetTop, behavior: 'smooth' });
-      return;
-    }
+    if (btn) { showTab(btn.dataset.tab, true); return; }
     var dh = e.target.closest('.day-head');
     if (dh) dh.parentNode.classList.toggle('open');
   }
@@ -295,7 +312,7 @@
       if (end && t > end) return h + '<div class="empty">This trip finished on ' + fmtDate(ctx.trip.end_date) + '.</div>';
       var day = ctx.days.filter(function (d) { return d.date === ctx.today; })[0];
       if (!day) return h + '<div class="empty">No plan entered for ' + fmtDate(ctx.today, true) + '.</div>';
-      return h + dayCard(ctx, day, true, true);
+      return h + dayCard(ctx, day, true, !params().today);
     },
 
     overview: function (ctx, label) {
@@ -422,24 +439,47 @@
   }
 
   // ---------- start ----------
+  function stampNow() {
+    return new Date().toLocaleString(undefined, { day: 'numeric', month: 'short', hour: '2-digit', minute: '2-digit' });
+  }
   function start() {
     var p = params();
+    // Opened from the home-screen icon without a trip in the link: reopen the last trip used.
+    if (!p.s && !('sample' in p)) {
+      var last = store('lastTrip');
+      if (last) { location.replace('#s=' + encodeURIComponent(last)); return; }
+    }
     if (p.s) {
+      store('lastTrip', p.s);
       var cacheKey = 'trip:' + p.s;
+      var cached = store(cacheKey);
+      // Show the saved copy at once, then refresh from the sheet when the network answers.
+      if (cached) {
+        hasSavedData = true;
+        render(cached.data, { source: 'saved ' + cached.at, banner: ['info', 'Checking for updates…'] });
+      }
       loadSheet(p.s).then(function (data) {
-        var stamp = new Date().toLocaleString();
+        var stamp = stampNow();
         store(cacheKey, { data: data, at: stamp });
-        render(data, { source: 'from Google Sheets', loadedAt: stamp });
+        hasSavedData = !!store(cacheKey);
+        render(data, { source: 'updated ' + stamp });
       }).catch(function (err) {
-        var cached = store(cacheKey);
-        if (cached) render(cached.data, { source: 'saved copy', loadedAt: cached.at, banner: ['warn', 'Offline or sheet unreachable, showing the copy saved ' + cached.at + '.'] });
-        else document.getElementById('app').innerHTML = '<div class="banner error">Could not load the trip: ' + esc(err.message) + '</div>';
+        if (cached) render(cached.data, { source: 'saved ' + cached.at, banner: ['warn', 'No connection. Showing the copy saved ' + cached.at + '.'] });
+        else document.getElementById('app').innerHTML = '<div class="banner error">Could not load the trip: ' + esc(err.message) +
+          '. Open this link once with internet so it can be saved for offline use.</div>';
       });
     } else if (window.SAMPLE_TRIP) {
       render(fromSample(window.SAMPLE_TRIP), { source: 'sample (Montenegro)', banner: ['info', 'Sample trip. Add #s=<sheet id> to the link to load a real trip.'] });
     } else {
       document.getElementById('app').innerHTML = '<div class="banner error">No trip given. Add #s=&lt;sheet id&gt; to the link.</div>';
     }
+  }
+  var app = document.getElementById('app');
+  app.addEventListener('click', onClick);
+  app.addEventListener('change', onChange);
+  if ('serviceWorker' in navigator && /^https?:$/.test(location.protocol)) {
+    navigator.serviceWorker.register('sw.js').catch(function () { /* site still works online */ });
+    navigator.serviceWorker.addEventListener('controllerchange', updateBadge);
   }
   window.addEventListener('hashchange', function () { location.reload(); });
   start();

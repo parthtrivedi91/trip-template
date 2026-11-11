@@ -17,3 +17,13 @@ A phone-first trip website that draws everything from a Google Sheet. Changing a
 ## Never put in any public tab
 
 PINs, booking references, surnames, seat numbers, passport or card numbers.
+
+## Offline
+
+- The first visit with internet saves the site files (service worker, `sw.js`) and the trip data. After that it opens with no signal and shows "No connection. Showing the copy saved …".
+- The footer badge says "✓ Saved for offline" once both are stored.
+- Add to the home screen: iPhone Safari → Share → Add to Home Screen; Android Chrome → menu → Add to Home screen. Open the icon once with internet, because on iPhone the home-screen app keeps its own storage.
+- The icon reopens the last trip opened. To see the sample instead, add `#sample` to the link.
+- When any site file changes, bump `VERSION` in `sw.js` so phones fetch the new files.
+
+Fonts: Cormorant Garamond and DM Sans, self-hosted under the SIL Open Font License (see `fonts/`).
